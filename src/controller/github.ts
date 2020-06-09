@@ -13,8 +13,19 @@ import { Issues, Push, PullRequest } from "github-webhook-event-types";
 
 const HEADER_KEY: string = "x-github-event";
 // 陷入了沉思，为什么gitlab这里没有过去式，而github这里的action全加上了过去式
+
+const userWords = {
+    "fengqi": "@冯起",
+    "hechuang": "@何闯",
+    "ruifeng": "@杨瑞峰"
+};
+
 const actionWords = {
     "opened": "发起",
+    "labeled": "标记",
+    "review_request_removed": "删除reviewer",
+    "review_requested": "添加reviewer",
+    "submitted": "提交了建议",
     "closed": "关闭",
     "reopened": "重新发起",
     "edited": "更新",
@@ -47,6 +58,8 @@ export default class GithubWebhookController {
                 return await GithubWebhookController.handlePush(ctx, robotid);
             case "pull_request":
                 return await GithubWebhookController.handlePR(ctx, robotid);
+            case "pull_request_review":
+                return await GithubWebhookController.handlePRReview(ctx, robotid);
             case "ping":
                 return await GithubWebhookController.handlePing(ctx, robotid);
             case "issues":
@@ -94,7 +107,7 @@ export default class GithubWebhookController {
             ctx.body = msg;
             return await robot.sendTextMsg(msg);
         } else {
-            const lastCommit = commits[0];
+            const lastCommit = commits[commits.length-1];
             msg = `项目 ${repository.name} 收到了一次push，提交者：${user_name}，最新提交信息：${lastCommit.message}`;
             ctx.body = msg;
             const mdMsg = `项目 [${repository.name}](${repository.url}) 收到一次push提交
@@ -108,22 +121,91 @@ export default class GithubWebhookController {
     }
 
     /**
+     * 处理pr review request事件
+     * @param ctx koa context
+     * @param robotid 机器人id
+     */
+    public static async handlePRReview(ctx: BaseContext, robotid?: string) {
+        const body = JSON.parse(ctx.request.body.payload);
+        const robot: ChatRobot = new ChatRobot(
+            config.chatid
+        );
+        log.info("pr http body", body);
+        const {action, sender, pull_request, repository, review} = body;
+        let mdMsg
+        if (pull_request.title.search("rgw") == -1) {
+            ctx.status = 200;
+            return '不是RGW的PR';
+        }
+        if (action == "submitted") {
+            if (!review) {
+                ctx.status = 200;
+                return '不需要通知';
+            }
+            if (review.user.login) {
+                mdMsg = `${sender.login}在 [${repository.full_name}](${repository.html_url}) ${actionWords[action]}
+                        标题：${pull_request.title}
+                        源分支：${pull_request.head.ref}
+                        目标分支：${pull_request.base.ref}
+                        review： ${userWords[review.user.login]}
+                        结果：${review.state}
+                        内容：${review.body}
+                        [查看PR详情](${pull_request.html_url})`;
+            }
+            await robot.sendMdMsg(mdMsg);
+            ctx.status = 200;
+            return;
+        } else {
+          ctx.status = 200;
+          return;
+        }
+    }
+
+
+    /**
      * 处理merge request事件
      * @param ctx koa context
      * @param robotid 机器人id
      */
     public static async handlePR(ctx: BaseContext, robotid?: string) {
-        const body: PullRequest = JSON.parse(ctx.request.body.payload);
+        const body = JSON.parse(ctx.request.body.payload);
         const robot: ChatRobot = new ChatRobot(
             config.chatid
         );
         log.info("pr http body", body);
-        const {action, sender, pull_request, repository} = body;
-        const mdMsg = `${sender.login}在 [${repository.full_name}](${repository.html_url}) ${actionWords[action]}了PR
+        const {action, sender, pull_request, repository, requested_reviewer, label} = body;
+        let mdMsg
+        if (pull_request.title.search("rgw") == -1) {
+            ctx.status = 200;
+            return '不是RGW的PR';
+        }
+        if (action == "review_requested" ||
+            action == "review_request_removed") {
+            if (!requested_reviewer ) {
+                ctx.status = 200;
+                return '不需要通知';
+            }
+            if (requested_reviewer.login) {
+                mdMsg = `${sender.login}在 [${repository.full_name}](${repository.html_url}) ${actionWords[action]}
                         标题：${pull_request.title}
                         源分支：${pull_request.head.ref}
                         目标分支：${pull_request.base.ref}
+                        review： ${userWords[requested_reviewer.login]}
                         [查看PR详情](${pull_request.html_url})`;
+            }
+            await robot.sendMdMsg(mdMsg);
+            ctx.status = 200;
+            return;
+        }
+        if (label &&label.name !== "rgw") {
+          ctx.status = 200;
+          return
+        }
+        mdMsg = `${sender.login}在 [${repository.full_name}](${repository.html_url}) ${actionWords[action]}了PR
+                标题：${pull_request.title}
+                源分支：${pull_request.head.ref}
+                目标分支：${pull_request.base.ref}
+                [查看PR详情](${pull_request.html_url})`;
         await robot.sendMdMsg(mdMsg);
         ctx.status = 200;
         return;
